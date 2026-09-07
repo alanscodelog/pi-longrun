@@ -1,0 +1,21 @@
+{
+	"name": "pi-longrun",
+	"version": "0.1.0",
+	"description": "Background jobs and scheduled wakeups for the pi coding agent",
+	"type": "module",
+	"license": "MIT",
+	"pi": {
+		"extensions": ["./src/index.ts"]
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest --run",
+		"dev": "pi -e ./src/index.ts"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^0.74.2",
+		"@types/node": "^24.3.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.2.4"
+	}
+}
