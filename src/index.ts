@@ -11,7 +11,7 @@ import { DEFAULT_CONFIG, type LongrunConfig, loadConfig } from "./config.js";
 import { buildSystemPromptSection, WaitBackoff, inspectBackgroundLaunch, inspectBashCommand } from "./guards.js";
 import { JobStore } from "./jobs.js";
 import { describeStatus, jobLine, registerTools } from "./tools.js";
-import { JobUi } from "./ui.js";
+import { JobUi, registerWakeRenderer } from "./ui.js";
 import { WaitWatcher } from "./waits.js";
 import { WakeNotifier } from "./wake.js";
 
@@ -32,6 +32,7 @@ export default function (pi: ExtensionAPI) {
 	const notifier = new WakeNotifier(pi, store, () => cwd, () => config, () => ui.refresh());
 
 	registerTools(pi, { store, waits, backoff, getConfig: () => config, getSessionFile: () => sessionFile });
+	registerWakeRenderer(pi);
 
 	pi.registerCommand("jobs", {
 		description: "Show or hide the background job list",

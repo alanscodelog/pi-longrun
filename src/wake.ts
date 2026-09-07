@@ -21,6 +21,8 @@ const TAIL_ON_MATCH = 8;
 
 export interface WakeDelivery {
 	content: string;
+	/** One-line version, used for the collapsed TUI row. */
+	summary: string;
 	urgent: boolean;
 	events: WakeEvent[];
 }
@@ -113,7 +115,24 @@ export function formatWake(events: WakeEvent[], store: JobStore, cwd: string, co
 	);
 
 	const urgent = events.some((e) => (e.reason.kind === "job_exit" ? failed(e.reason.job) : false));
-	return { content: body.join("\n"), urgent, events };
+	return { content: body.join("\n"), summary: summarize(events), urgent, events };
+}
+
+function summarize(events: WakeEvent[]): string {
+	if (events.length !== 1) return `${events.length} wake conditions fired`;
+	const reason = events[0]?.reason;
+	switch (reason?.kind) {
+		case "job_exit":
+			return `${reason.job.id} ${reason.job.status} (exit ${reason.job.exitCode ?? "?"})`;
+		case "log_match":
+			return `${reason.job.id} matched /${reason.pattern}/`;
+		case "file":
+			return `${reason.path} ${reason.created ? "appeared" : "changed"}`;
+		case "max_wait":
+			return "wait timed out";
+		default:
+			return "scheduled wake-up";
+	}
 }
 
 /** Buffers wake events briefly so simultaneous ones become a single turn. */
@@ -152,7 +171,10 @@ export class WakeNotifier {
 				customType: "longrun-wake",
 				content: delivery.content,
 				display: true,
-				details: { events: events.map((e) => ({ reason: e.reason.kind, waitId: e.wait.id, note: e.wait.note })) },
+				details: {
+					summary: delivery.summary,
+					events: events.map((e) => ({ reason: e.reason.kind, waitId: e.wait.id, note: e.wait.note })),
+				},
 			},
 			{
 				triggerTurn: true,

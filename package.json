@@ -5,7 +5,9 @@
 	"type": "module",
 	"license": "MIT",
 	"pi": {
-		"extensions": ["./src/index.ts"]
+		"extensions": [
+			"./src/index.ts"
+		]
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
@@ -17,5 +19,12 @@
 		"@types/node": "^24.3.0",
 		"typescript": "^5.7.3",
 		"vitest": "^3.2.4"
-	}
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"coding-agent",
+		"background-jobs",
+		"long-running"
+	]
 }

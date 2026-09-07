@@ -1,6 +1,7 @@
 /** Footer status and the /jobs widget. Purely local UI: nothing here reaches the LLM. */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import type { LongrunConfig } from "./config.js";
 import { formatDuration, oneLine } from "./format.js";
 import type { JobStore } from "./jobs.js";
@@ -96,4 +97,28 @@ export class JobUi {
 		}
 		return lines;
 	}
+}
+
+/**
+ * Wake notifications are injected, not typed by the user, so they need to read as
+ * something the runtime did. Collapsed shows the outcome; expanded shows the log tail.
+ */
+export function registerWakeRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer("longrun-wake", (message, { expanded }, theme) => {
+		const content = String(message.content ?? "");
+		try {
+			const details = message.details as { summary?: string } | undefined;
+			const heading = theme.fg("toolTitle", theme.bold("⏰ longrun wake"));
+			const body = expanded
+				? content
+				: theme.fg("muted", details?.summary ?? content.split("\n")[1] ?? "condition fired");
+
+			const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+			box.addChild(new Text(`${heading}  ${body}`, 0, 0));
+			return box;
+		} catch {
+			// A rendering failure must never cost the user the message itself.
+			return new Text(content, 0, 0);
+		}
+	});
 }

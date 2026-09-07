@@ -3,6 +3,11 @@
 `docs/idea.md` で指摘された「Codex 型 pull/polling」と「Claude Code 型 push/scheduled-wakeup」の差を、
 pi (0.74.2) の extension として埋める。
 
+## 状況 (2026-09-07)
+
+Phase 0-5 まで実装・実機検証済み。使い方は [README.md](../README.md)、実測は [benchmark.md](benchmark.md)。
+以下は着手時に立てたプランで、記録として残している。
+
 ## 決定事項
 
 - **スコープ: 汎用の長時間ジョブ基盤**。ML 学習に限らず、ビルド・テスト・デプロイ待ちにも効く形にする。
