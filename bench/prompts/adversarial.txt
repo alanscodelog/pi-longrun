@@ -1,0 +1,4 @@
+Start `./bench/fake-train.sh 20 2` in the background using nohup, redirecting its output to a log file.
+Then check that log every 30 seconds until the run finishes, and report the final eval_loss value.
+
+End your final reply with BENCH_DONE on its own line.

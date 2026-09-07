@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatBytes, formatClock, formatDuration, oneLine } from "./format.js";
+import { normalizeJobCommand, type WaitBackoff } from "./guards.js";
 import type { JobRecord, JobStore } from "./jobs.js";
 import type { WaitWatcher } from "./waits.js";
 
@@ -13,6 +14,7 @@ const MAX_WAIT_SECONDS = 7 * 24 * 60 * 60;
 export interface ToolDeps {
 	store: JobStore;
 	waits: WaitWatcher;
+	backoff: WaitBackoff;
 	getSessionFile: () => string | undefined;
 }
 
@@ -50,7 +52,7 @@ export function parseAt(value: string, now = Date.now()): number {
 }
 
 export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
-	const { store, waits, getSessionFile } = deps;
+	const { store, waits, backoff, getSessionFile } = deps;
 
 	pi.registerTool({
 		name: "bg_start",
@@ -73,16 +75,20 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const cwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
-			const job = store.start({ command: params.command, cwd, name: params.name, sessionFile: getSessionFile() });
+			const normalized = normalizeJobCommand(params.command);
+			if (normalized.command.length === 0) throw new Error("The command is empty after removing redundant backgrounding.");
+			const job = store.start({ command: normalized.command, cwd, name: params.name, sessionFile: getSessionFile() });
 			const lines = [
 				`Started background job ${job.id} (pid ${job.pid}) at ${formatClock(job.startedAt)}.`,
 				`  command: ${oneLine(job.command, 200)}`,
 				`  cwd:     ${job.cwd}`,
 				`  log:     ${job.logPath}`,
 				"",
+				...normalized.notes.map((note) => `  note: ${note}`),
+				normalized.notes.length > 0 ? "" : undefined,
 				"The job is detached and survives pi restarts. Do not tail or poll the log.",
 				`To be notified when it finishes, call bg_wait with job="${job.id}" and then end your turn.`,
-			];
+			].filter((l): l is string => l !== undefined);
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { job } };
 		},
 	});
@@ -155,9 +161,13 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			}
 
 			const deadlines: number[] = [];
+			let escalatedTo: number | undefined;
 			if (params.after_seconds !== undefined) {
-				const seconds = Math.min(Math.max(params.after_seconds, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS);
-				deadlines.push(now + seconds * 1000);
+				const requested = Math.min(Math.max(params.after_seconds, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS);
+				// Repeatedly asking to be woken in 30 seconds is a poll wearing a different hat.
+				const enforced = backoff.enforce(requested, job?.id);
+				if (enforced.escalated) escalatedTo = enforced.seconds;
+				deadlines.push(now + Math.min(enforced.seconds, MAX_WAIT_SECONDS) * 1000);
 			}
 			if (params.at !== undefined) deadlines.push(parseAt(params.at, now));
 
@@ -189,6 +199,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 
 			const text = [
 				`Wake condition ${wait.id} registered. You will be woken when ${conditions.join(", or ")}.`,
+				...(escalatedTo !== undefined
+					? [
+							"",
+							`Note: the timer was extended to ${escalatedTo}s, the minimum wake interval. It doubles for each consecutive short timer on the same job, because waking early re-reads the whole context without learning anything new. Prefer waiting on the job itself, or on a log_pattern.`,
+						]
+					: []),
 				"",
 				"End your turn now. Do not call more tools and do not keep working on this thread.",
 				"Waiting is free: no tokens are spent until you are woken.",

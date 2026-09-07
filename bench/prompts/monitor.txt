@@ -1,0 +1,7 @@
+Run the training script `./bench/fake-train.sh 40 3` from the repository root.
+It prints one line per step and takes a couple of minutes to finish.
+
+Do not block the session on it while it runs. Monitor it, and once it has finished,
+report the final eval_loss value and how many steps it ran.
+
+End your final reply with BENCH_DONE on its own line.

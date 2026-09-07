@@ -6,6 +6,9 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_CONFIG, type LongrunConfig, loadConfig } from "./config.js";
+import { buildSystemPromptSection, WaitBackoff, inspectBackgroundLaunch, inspectBashCommand } from "./guards.js";
 import { JobStore } from "./jobs.js";
 import { describeStatus, jobLine, registerTools } from "./tools.js";
 import { JobUi } from "./ui.js";
@@ -23,10 +26,12 @@ export default function (pi: ExtensionAPI) {
 	let cwd = process.cwd();
 	let unsubscribe: (() => void) | undefined;
 	let startupTimer: NodeJS.Timeout | undefined;
+	let config: LongrunConfig = DEFAULT_CONFIG;
+	const backoff = new WaitBackoff(() => config);
 
 	const notifier = new WakeNotifier(pi, store, () => cwd, () => ui.refresh());
 
-	registerTools(pi, { store, waits, getSessionFile: () => sessionFile });
+	registerTools(pi, { store, waits, backoff, getSessionFile: () => sessionFile });
 
 	pi.registerCommand("jobs", {
 		description: "Show or hide the background job list",
@@ -59,6 +64,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		sessionFile = ctx.sessionManager.getSessionFile();
 		cwd = ctx.cwd;
+		config = loadConfig(ctx.cwd);
 		ui.attach(ctx);
 
 		// Jobs outlive pi. Reconcile records against reality before anything else looks at them.
@@ -75,7 +81,11 @@ export default function (pi: ExtensionAPI) {
 
 		// Wake conditions are keyed to the session file, so resuming a session resumes its waits.
 		const restored = waits.load(sessionFile);
-		waits.start((events) => notifier.push(events));
+		waits.start((events) => {
+			// A real event means the model was waiting on something, not spinning.
+			if (events.some((e) => e.reason.kind !== "timer")) backoff.reset();
+			notifier.push(events);
+		});
 		if (restored.length > 0) {
 			ui.notify(`Restored ${restored.length} pending wake condition(s)`, "info");
 			clearTimeout(startupTimer);
@@ -89,6 +99,24 @@ export default function (pi: ExtensionAPI) {
 
 		if (store.running(ctx.cwd).length > 0) store.ensurePolling();
 		ui.refresh();
+	});
+
+	// Block the two habits that turn a long job into a token sink.
+	pi.on("tool_call", async (event, _ctx) => {
+		if (!isToolCallEventType("bash", event)) return;
+		const command = event.input.command;
+		if (typeof command !== "string" || command.trim().length === 0) return;
+		const verdict = inspectBackgroundLaunch(command, config) ?? inspectBashCommand(command, config);
+		if (verdict) return { block: true, reason: verdict.reason };
+	});
+
+	// Keep running jobs and pending wake-ups in the system prompt so the model
+	// never has to spend a tool call finding out what it is already waiting for.
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (!config.injectSystemPrompt) return;
+		const section = buildSystemPromptSection(store, waits, ctx.cwd);
+		if (!section) return;
+		return { systemPrompt: `${event.systemPrompt}\n\n${section}` };
 	});
 
 	pi.on("session_shutdown", async () => {
