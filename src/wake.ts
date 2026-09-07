@@ -8,8 +8,10 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { LongrunConfig } from "./config.js";
 import { formatClock, formatDuration } from "./format.js";
 import type { JobRecord, JobStore } from "./jobs.js";
+import { estimateProgress, extractMetrics, formatMetrics, formatProgress } from "./metrics.js";
 import { describeStatus } from "./tools.js";
 import type { WakeEvent } from "./waits.js";
 
@@ -31,7 +33,7 @@ function indent(lines: string[]): string[] {
 	return lines.map((l) => `   | ${l}`);
 }
 
-function renderEvent(event: WakeEvent, store: JobStore, index: number, total: number): string[] {
+function renderEvent(event: WakeEvent, store: JobStore, config: LongrunConfig, index: number, total: number): string[] {
 	const label = total > 1 ? `${index + 1}. ` : "";
 	const lines: string[] = [];
 	const reason = event.reason;
@@ -39,6 +41,11 @@ function renderEvent(event: WakeEvent, store: JobStore, index: number, total: nu
 	switch (reason.kind) {
 		case "job_exit": {
 			lines.push(`${label}job ${reason.job.id} ${describeStatus(reason.job, event.firedAt)}`);
+			// Waking on exit while a pattern was pending means the pattern never hit.
+			// Say so, otherwise the model assumes its regex was the thing that fired.
+			if (event.wait.logPattern) {
+				lines.push(`   note: your log_pattern /${event.wait.logPattern}/ never matched; the job ending is what woke you`);
+			}
 			break;
 		}
 		case "log_match": {
@@ -65,6 +72,13 @@ function renderEvent(event: WakeEvent, store: JobStore, index: number, total: nu
 	const job = reason.kind === "job_exit" || reason.kind === "log_match" ? reason.job : undefined;
 	if (job) {
 		const tail = store.readLog(job, { tail: reason.kind === "job_exit" ? TAIL_ON_EXIT : TAIL_ON_MATCH });
+		// Metrics come before the raw tail: they are what the model is usually after.
+		const metrics = formatMetrics(extractMetrics(tail.lines, config));
+		if (metrics) lines.push(`   metrics: ${metrics}`);
+		if (job.status === "running") {
+			const progress = estimateProgress(tail.lines, event.firedAt - job.startedAt, config);
+			if (progress) lines.push(`   progress: ${formatProgress(progress)}`);
+		}
 		if (tail.lines.length > 0) {
 			lines.push(`   log tail (${tail.lines.length} lines${tail.truncated ? " of a longer log" : ""}):`);
 			lines.push(...indent(tail.lines));
@@ -75,7 +89,7 @@ function renderEvent(event: WakeEvent, store: JobStore, index: number, total: nu
 	return lines;
 }
 
-export function formatWake(events: WakeEvent[], store: JobStore, cwd: string): WakeDelivery {
+export function formatWake(events: WakeEvent[], store: JobStore, cwd: string, config: LongrunConfig): WakeDelivery {
 	const firedAt = events[0]?.firedAt ?? Date.now();
 	const header =
 		events.length === 1
@@ -84,7 +98,7 @@ export function formatWake(events: WakeEvent[], store: JobStore, cwd: string): W
 
 	const body: string[] = [header, ""];
 	events.forEach((event, i) => {
-		body.push(...renderEvent(event, store, i, events.length));
+		body.push(...renderEvent(event, store, config, i, events.length));
 		body.push("");
 	});
 
@@ -111,6 +125,7 @@ export class WakeNotifier {
 		private readonly pi: ExtensionAPI,
 		private readonly store: JobStore,
 		private readonly getCwd: () => string,
+		private readonly getConfig: () => LongrunConfig,
 		private readonly onDelivered?: (delivery: WakeDelivery) => void,
 	) {}
 
@@ -131,7 +146,7 @@ export class WakeNotifier {
 		const events = this.pending.splice(0);
 		if (events.length === 0) return;
 
-		const delivery = formatWake(events, this.store, this.getCwd());
+		const delivery = formatWake(events, this.store, this.getCwd(), this.getConfig());
 		this.pi.sendMessage(
 			{
 				customType: "longrun-wake",

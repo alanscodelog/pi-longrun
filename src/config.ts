@@ -21,6 +21,16 @@ export interface LongrunConfig {
 	backoffFloorSeconds: number;
 	/** Inject the long-running work section into the system prompt. */
 	injectSystemPrompt: boolean;
+	/** Pull numeric key=value pairs out of log tails and put them in wake notifications. */
+	extractMetrics: boolean;
+	/** Named extraction rules for logs that are not key=value. The first capture group is the value. */
+	metricPatterns: { name: string; pattern: string }[];
+	/** Maximum metrics shown at once, so a chatty log cannot flood a notification. */
+	maxMetrics: number;
+	/** Two capture groups, current and total, used to estimate progress and ETA. */
+	progressPattern: string;
+	/** bash commands matching these regexes are rejected with a pointer to bg_start. */
+	autoBackgroundPatterns: string[];
 }
 
 export const DEFAULT_CONFIG: LongrunConfig = {
@@ -30,6 +40,11 @@ export const DEFAULT_CONFIG: LongrunConfig = {
 	maxCompoundSleepSeconds: 10,
 	backoffFloorSeconds: 60,
 	injectSystemPrompt: true,
+	extractMetrics: true,
+	metricPatterns: [],
+	maxMetrics: 10,
+	progressPattern: "\\b(\\d+)\\s*/\\s*(\\d+)\\b",
+	autoBackgroundPatterns: [],
 };
 
 function readJson(file: string): Partial<LongrunConfig> | undefined {

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config.js";
 import { JobStore, tmpStoreRoot } from "../src/jobs.js";
 import { formatWake } from "../src/wake.js";
 import { WaitWatcher } from "../src/waits.js";
@@ -131,7 +132,7 @@ describe("formatWake", () => {
 			return e.length > 0 ? e : undefined;
 		});
 
-		const delivery = formatWake(events, store, process.cwd());
+		const delivery = formatWake(events, store, process.cwd(), DEFAULT_CONFIG);
 		expect(delivery.content).toContain("[longrun] wake at");
 		expect(delivery.content).toContain("exit code 0");
 		expect(delivery.content).toContain("your note: launch the next variant");
@@ -151,7 +152,7 @@ describe("formatWake", () => {
 			const e = waits.evaluate();
 			return e.length === 2 ? e : undefined;
 		});
-		const delivery = formatWake(events, store, process.cwd());
+		const delivery = formatWake(events, store, process.cwd(), DEFAULT_CONFIG);
 		expect(delivery.urgent).toBe(true);
 		expect(delivery.content).toContain("2 wake conditions fired");
 		expect(delivery.content).toContain("1. job good-");

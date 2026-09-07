@@ -4,8 +4,10 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatBytes, formatClock, formatDuration, oneLine } from "./format.js";
+import type { LongrunConfig } from "./config.js";
 import { normalizeJobCommand, type WaitBackoff } from "./guards.js";
 import type { JobRecord, JobStore } from "./jobs.js";
+import { extractMetrics, formatMetrics, summarizeJob } from "./metrics.js";
 import type { WaitWatcher } from "./waits.js";
 
 const MIN_WAIT_SECONDS = 5;
@@ -15,13 +17,18 @@ export interface ToolDeps {
 	store: JobStore;
 	waits: WaitWatcher;
 	backoff: WaitBackoff;
+	getConfig: () => LongrunConfig;
 	getSessionFile: () => string | undefined;
 }
 
 export function describeStatus(job: JobRecord, now = Date.now()): string {
 	if (job.status === "running") return `running for ${formatDuration(now - job.startedAt)}`;
 	const ran = formatDuration((job.endedAt ?? now) - job.startedAt);
-	if (job.status === "unknown") return `ended after ${ran} (exit code unknown - killed or machine restarted)`;
+	if (job.status === "unknown") {
+		return job.error
+			? `failed to run after ${ran}: ${job.error}`
+			: `ended after ${ran} (exit code unknown - killed or machine restarted)`;
+	}
 	return `${job.status} after ${ran} with exit code ${job.exitCode ?? "?"}`;
 }
 
@@ -52,7 +59,7 @@ export function parseAt(value: string, now = Date.now()): number {
 }
 
 export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
-	const { store, waits, backoff, getSessionFile } = deps;
+	const { store, waits, backoff, getConfig, getSessionFile } = deps;
 
 	pi.registerTool({
 		name: "bg_start",
@@ -74,7 +81,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			cwd: Type.Optional(Type.String({ description: "Working directory, absolute or relative to the session cwd" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const cwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
+			const cwd = params.cwd?.trim() ? path.resolve(ctx.cwd, params.cwd.trim()) : ctx.cwd;
 			const normalized = normalizeJobCommand(params.command);
 			if (normalized.command.length === 0) throw new Error("The command is empty after removing redundant backgrounding.");
 			const job = store.start({ command: normalized.command, cwd, name: params.name, sessionFile: getSessionFile() });
@@ -117,7 +124,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			log_pattern: Type.Optional(
 				Type.String({
 					description:
-						"Regular expression: wake when NEW output of the job's log matches it, e.g. 'eval_loss' or 'Traceback'. Requires job.",
+						"Regular expression matched against raw log lines as they are written, e.g. 'eval_loss' or 'Traceback'. " +
+						"Only output produced after this call can match. Requires job.",
 				}),
 			),
 			after_seconds: Type.Optional(Type.Number({ description: "Wake this many seconds from now" })),
@@ -190,6 +198,21 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 						: undefined,
 			});
 
+			// A pattern that matches nothing in the output so far is usually a guess at
+			// the log format rather than a deliberate choice. Say so now, not in an hour.
+			let patternHint: string | undefined;
+			if (job && params.log_pattern) {
+				const existing = store.readLog(job, { tail: 20 });
+				if (existing.lines.length > 0) {
+					const re = new RegExp(params.log_pattern);
+					if (!existing.lines.some((line) => re.test(line))) {
+						patternHint =
+							`Heads up: /${params.log_pattern}/ does not match any of the last ${existing.lines.length} lines already in the log, ` +
+							`for example "${existing.lines[existing.lines.length - 1]}". If that is not the format you expected, the job ending will still wake you.`;
+					}
+				}
+			}
+
 			const conditions: string[] = [];
 			if (job && !params.log_pattern) conditions.push(`job ${job.id} stops running`);
 			if (job && params.log_pattern) conditions.push(`job ${job.id} log matches /${params.log_pattern}/, or the job stops running`);
@@ -199,6 +222,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 
 			const text = [
 				`Wake condition ${wait.id} registered. You will be woken when ${conditions.join(", or ")}.`,
+				...(patternHint ? ["", patternHint] : []),
 				...(escalatedTo !== undefined
 					? [
 							"",
@@ -232,6 +256,13 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				return { content: [{ type: "text", text: "No background jobs." }], details: { jobs: [] } };
 			}
 			const now = Date.now();
+			const config = getConfig();
+			const rows = jobs.flatMap((job) => {
+				const line = jobLine(job, now);
+				if (job.status !== "running") return [line];
+				const summary = summarizeJob(store, job, config, now);
+				return summary ? [line, `    latest: ${summary}`] : [line];
+			});
 			const pending = waits.list();
 			const footer =
 				pending.length > 0
@@ -241,9 +272,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				content: [
 					{
 						type: "text",
-						text: `${jobs.length} job(s), ${jobs.filter((j) => j.status === "running").length} running:\n${jobs
-							.map((j) => jobLine(j, now))
-							.join("\n")}${footer}`,
+						text: `${jobs.length} job(s), ${jobs.filter((j) => j.status === "running").length} running:\n${rows.join("\n")}${footer}`,
 					},
 				],
 				details: { jobs },
@@ -270,10 +299,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			store.check(job.id);
 			const fresh = store.resolve(job.id) ?? job;
 			const slice = store.readLog(fresh, { tail: params.tail, grep: params.grep });
+			const metrics = formatMetrics(extractMetrics(slice.lines, getConfig()));
 			const header =
 				`${fresh.id}: ${describeStatus(fresh)}` +
 				`\nlog ${formatBytes(slice.bytes)}${slice.truncated ? ", showing tail only" : ""}` +
-				(params.grep ? `, filtered by /${params.grep}/` : "");
+				(params.grep ? `, filtered by /${params.grep}/` : "") +
+				(metrics ? `\nmetrics: ${metrics}` : "");
 			const body = slice.lines.length > 0 ? slice.lines.join("\n") : "(no matching output)";
 			return { content: [{ type: "text", text: `${header}\n\n${body}` }], details: { job: fresh, slice } };
 		},

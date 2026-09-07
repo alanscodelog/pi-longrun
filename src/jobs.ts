@@ -33,6 +33,8 @@ export interface JobRecord {
 	endedAt?: number;
 	exitCode?: number | null;
 	status: JobStatus;
+	/** Set when the process could not be started or died before exec. */
+	error?: string;
 	/** Session that started the job, for provenance. */
 	sessionFile?: string;
 	/** Set once a wake notification for the terminal state has been delivered. */
@@ -188,6 +190,14 @@ export class JobStore {
 	start(options: StartOptions): JobRecord {
 		const name = (options.name?.trim() || slugifyCommand(options.command)).replace(/[^A-Za-z0-9._-]/g, "");
 		const id = this.allocateId(name.length > 0 ? name : "job");
+		// A bad cwd is the most common way a spawn fails, and the OS error for it is
+		// unhelpful. Check it here so the model gets something it can act on.
+		try {
+			if (!fs.statSync(options.cwd).isDirectory()) throw new Error("not a directory");
+		} catch {
+			throw new Error(`Cannot start job: cwd does not exist or is not a directory: ${options.cwd}`);
+		}
+
 		this.ensureDirs();
 		const logPath = path.join(this.logsDir, `${id}.log`);
 		const statusPath = path.join(this.logsDir, `${id}.status`);
@@ -214,7 +224,24 @@ export class JobStore {
 				stdio: ["ignore", fd, fd],
 			});
 			child.unref();
-			if (child.pid === undefined) throw new Error("failed to spawn background job");
+
+			// This listener must be attached before anything below can throw. A
+			// ChildProcess that emits "error" with no listener takes down the whole
+			// process, which would mean a bad tool argument kills the user's pi session.
+			child.on("error", (err) => {
+				const existing = this.read(id);
+				if (existing?.status !== "running") return;
+				const next = this.update(id, {
+					status: "unknown",
+					exitCode: null,
+					endedAt: Date.now(),
+					error: err.message,
+				});
+				if (next) this.emit(next, "running");
+				this.owned.delete(id);
+			});
+
+			if (child.pid === undefined) throw new Error("The operating system refused to start the process.");
 
 			const job: JobRecord = {
 				id,
@@ -231,7 +258,6 @@ export class JobStore {
 			this.write(job);
 			this.owned.set(id, { unref: () => child.unref() });
 			child.on("exit", () => this.check(id));
-			child.on("error", () => this.check(id));
 			this.ensurePolling();
 			return job;
 		} finally {

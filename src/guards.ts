@@ -11,6 +11,7 @@
 import type { LongrunConfig } from "./config.js";
 import { formatDuration, oneLine } from "./format.js";
 import type { JobStore } from "./jobs.js";
+import { summarizeJob } from "./metrics.js";
 import type { WaitWatcher } from "./waits.js";
 
 export interface GuardVerdict {
@@ -51,6 +52,19 @@ function isCompound(command: string): boolean {
 export function inspectBashCommand(command: string, config: LongrunConfig): GuardVerdict | undefined {
 	if (!config.guardBash) return undefined;
 	const trimmed = command.trim();
+
+	// Opt-in: commands a project knows are long-running should never go through bash.
+	for (const pattern of config.autoBackgroundPatterns) {
+		try {
+			if (new RegExp(pattern).test(trimmed)) {
+				return {
+					reason: `This project marks commands matching /${pattern}/ as long-running. Start it with bg_start and wait with bg_wait instead of blocking the session.`,
+				};
+			}
+		} catch {
+			/* an unparseable pattern must not break tool calls */
+		}
+	}
 
 	if (TAIL_FOLLOW.test(trimmed)) {
 		return {
@@ -187,7 +201,12 @@ export class WaitBackoff {
  * The state block appended to the system prompt. Keeping running jobs and pending
  * wake-ups in front of the model is what stops it calling bg_list to re-orient.
  */
-export function buildSystemPromptSection(store: JobStore, waits: WaitWatcher, cwd: string): string | undefined {
+export function buildSystemPromptSection(
+	store: JobStore,
+	waits: WaitWatcher,
+	cwd: string,
+	config: LongrunConfig,
+): string | undefined {
 	const running = store.running(cwd);
 	const pending = waits.list();
 	if (running.length === 0 && pending.length === 0) return undefined;
@@ -198,7 +217,9 @@ export function buildSystemPromptSection(store: JobStore, waits: WaitWatcher, cw
 	if (running.length > 0) {
 		lines.push("Background jobs currently running:");
 		for (const job of running) {
+			const summary = summarizeJob(store, job, config, now);
 			lines.push(`- ${job.id} (${formatDuration(now - job.startedAt)}): ${oneLine(job.command, 80)}`);
+			if (summary) lines.push(`  latest: ${summary}`);
 		}
 		lines.push("");
 	}

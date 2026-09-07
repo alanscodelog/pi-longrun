@@ -21,7 +21,7 @@ const STARTUP_EVALUATION_DELAY_MS = 750;
 export default function (pi: ExtensionAPI) {
 	const store = new JobStore();
 	const waits = new WaitWatcher(store, store.root);
-	const ui = new JobUi(store, waits);
+	const ui = new JobUi(store, waits, () => config);
 	let sessionFile: string | undefined;
 	let cwd = process.cwd();
 	let unsubscribe: (() => void) | undefined;
@@ -29,9 +29,9 @@ export default function (pi: ExtensionAPI) {
 	let config: LongrunConfig = DEFAULT_CONFIG;
 	const backoff = new WaitBackoff(() => config);
 
-	const notifier = new WakeNotifier(pi, store, () => cwd, () => ui.refresh());
+	const notifier = new WakeNotifier(pi, store, () => cwd, () => config, () => ui.refresh());
 
-	registerTools(pi, { store, waits, backoff, getSessionFile: () => sessionFile });
+	registerTools(pi, { store, waits, backoff, getConfig: () => config, getSessionFile: () => sessionFile });
 
 	pi.registerCommand("jobs", {
 		description: "Show or hide the background job list",
@@ -114,7 +114,7 @@ export default function (pi: ExtensionAPI) {
 	// never has to spend a tool call finding out what it is already waiting for.
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (!config.injectSystemPrompt) return;
-		const section = buildSystemPromptSection(store, waits, ctx.cwd);
+		const section = buildSystemPromptSection(store, waits, ctx.cwd, config);
 		if (!section) return;
 		return { systemPrompt: `${event.systemPrompt}\n\n${section}` };
 	});

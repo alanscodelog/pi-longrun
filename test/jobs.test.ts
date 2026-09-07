@@ -105,3 +105,21 @@ describe("JobStore", () => {
 		fresh.dispose();
 	});
 });
+
+describe("JobStore failure handling", () => {
+	it("rejects a bad cwd with an actionable message instead of crashing", () => {
+		const store = newStore();
+		expect(() => store.start({ command: "echo hi", cwd: "/definitely/not/a/real/dir" })).toThrow(/cwd does not exist/);
+		// The model can pass a path with stray whitespace; it must not take down pi.
+		expect(() => store.start({ command: "echo hi", cwd: `${process.cwd()}/. ` })).toThrow(/cwd does not exist/);
+		expect(store.list()).toHaveLength(0);
+	});
+
+	it("survives a command that cannot be executed", async () => {
+		const store = newStore();
+		const job = store.start({ command: "this-command-does-not-exist-anywhere", cwd: process.cwd() });
+		const finished = await waitForExit(store, job.id);
+		// The shell starts fine and reports 127; the job is recorded, not crashed.
+		expect(finished.exitCode).toBe(127);
+	});
+});

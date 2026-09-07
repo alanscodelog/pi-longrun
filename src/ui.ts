@@ -1,8 +1,10 @@
 /** Footer status and the /jobs widget. Purely local UI: nothing here reaches the LLM. */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { LongrunConfig } from "./config.js";
 import { formatDuration, oneLine } from "./format.js";
 import type { JobStore } from "./jobs.js";
+import { summarizeJob } from "./metrics.js";
 import type { WaitWatcher } from "./waits.js";
 
 const STATUS_KEY = "longrun";
@@ -17,6 +19,7 @@ export class JobUi {
 	constructor(
 		private readonly store: JobStore,
 		private readonly waits: WaitWatcher,
+		private readonly getConfig: () => LongrunConfig,
 	) {}
 
 	attach(ctx: ExtensionContext): void {
@@ -83,6 +86,10 @@ export class JobUi {
 			const age = formatDuration((job.status === "running" ? now : (job.endedAt ?? now)) - job.startedAt);
 			const outcome = job.status === "running" ? "" : ` exit ${job.exitCode ?? "?"}`;
 			lines.push(`  ${marker} ${job.id}  ${age}${outcome}  ${oneLine(job.command, 48)}`);
+			if (job.status === "running") {
+				const summary = summarizeJob(this.store, job, this.getConfig(), now);
+				if (summary) lines.push(`      ${oneLine(summary, 70)}`);
+			}
 		}
 		for (const wait of pending) {
 			lines.push(`  ⏰ ${wait.id}  ${oneLine(wait.note, 56)}`);

@@ -1,0 +1,6 @@
+Start `./bench/fake-train.sh 30 2` as a background job.
+
+First, wait until its log reaches step 15, and when you are woken report the loss at that point
+and how far along the run is. Then wait for the run to finish and report the final eval_loss.
+
+End your final reply with BENCH_DONE on its own line.
