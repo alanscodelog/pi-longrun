@@ -3,6 +3,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration, oneLine } from "./format.js";
 import type { JobStore } from "./jobs.js";
+import type { WaitWatcher } from "./waits.js";
 
 const STATUS_KEY = "longrun";
 const WIDGET_KEY = "longrun-jobs";
@@ -13,7 +14,10 @@ export class JobUi {
 	private timer: NodeJS.Timeout | undefined;
 	private widgetVisible = false;
 
-	constructor(private readonly store: JobStore) {}
+	constructor(
+		private readonly store: JobStore,
+		private readonly waits: WaitWatcher,
+	) {}
 
 	attach(ctx: ExtensionContext): void {
 		this.ctx = ctx;
@@ -52,7 +56,14 @@ export class JobUi {
 		if (!ctx?.hasUI) return;
 
 		const running = this.store.running(ctx.cwd);
-		ctx.ui.setStatus(STATUS_KEY, running.length > 0 ? `▶ ${running.length} job${running.length > 1 ? "s" : ""}` : undefined);
+		const pending = this.waits.list();
+		const parts: string[] = [];
+		if (running.length > 0) parts.push(`▶ ${running.length} job${running.length > 1 ? "s" : ""}`);
+		if (pending.length > 0) {
+			const next = this.waits.nextDeadline();
+			parts.push(next !== undefined ? `⏰ wake in ${formatDuration(next - Date.now())}` : `⏰ ${pending.length} wait`);
+		}
+		ctx.ui.setStatus(STATUS_KEY, parts.length > 0 ? parts.join("  ") : undefined);
 
 		if (!this.widgetVisible) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
@@ -64,13 +75,17 @@ export class JobUi {
 	private widgetLines(cwd: string): string[] {
 		const now = Date.now();
 		const jobs = this.store.listFor(cwd).slice(0, 12);
-		if (jobs.length === 0) return ["longrun: no background jobs"];
+		const pending = this.waits.list();
+		if (jobs.length === 0 && pending.length === 0) return ["longrun: no background jobs"];
 		const lines = ["longrun jobs (/jobs to hide)"];
 		for (const job of jobs) {
 			const marker = job.status === "running" ? "▶" : job.exitCode === 0 ? "✓" : "✗";
 			const age = formatDuration((job.status === "running" ? now : (job.endedAt ?? now)) - job.startedAt);
 			const outcome = job.status === "running" ? "" : ` exit ${job.exitCode ?? "?"}`;
 			lines.push(`  ${marker} ${job.id}  ${age}${outcome}  ${oneLine(job.command, 48)}`);
+		}
+		for (const wait of pending) {
+			lines.push(`  ⏰ ${wait.id}  ${oneLine(wait.note, 56)}`);
 		}
 		return lines;
 	}

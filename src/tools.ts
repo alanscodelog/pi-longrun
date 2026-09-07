@@ -1,10 +1,20 @@
-/** LLM-facing tools for starting and inspecting background jobs. */
+/** LLM-facing tools: start background jobs, and wait for things without burning turns. */
 
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatBytes, formatClock, formatDuration, oneLine } from "./format.js";
 import type { JobRecord, JobStore } from "./jobs.js";
+import type { WaitWatcher } from "./waits.js";
+
+const MIN_WAIT_SECONDS = 5;
+const MAX_WAIT_SECONDS = 7 * 24 * 60 * 60;
+
+export interface ToolDeps {
+	store: JobStore;
+	waits: WaitWatcher;
+	getSessionFile: () => string | undefined;
+}
 
 export function describeStatus(job: JobRecord, now = Date.now()): string {
 	if (job.status === "running") return `running for ${formatDuration(now - job.startedAt)}`;
@@ -16,12 +26,32 @@ export function describeStatus(job: JobRecord, now = Date.now()): string {
 /** One line per job, dense enough to keep bg_list cheap in context. */
 export function jobLine(job: JobRecord, now = Date.now()): string {
 	const marker = job.status === "running" ? "▶" : job.exitCode === 0 ? "✓" : "✗";
-	const age = job.status === "running" ? formatDuration(now - job.startedAt) : formatDuration((job.endedAt ?? now) - job.startedAt);
+	const age = formatDuration((job.status === "running" ? now : (job.endedAt ?? now)) - job.startedAt);
 	const outcome = job.status === "running" ? "running" : job.status === "unknown" ? "exit ?" : `exit ${job.exitCode ?? "?"}`;
 	return `${marker} ${job.id.padEnd(20)} ${age.padStart(8)}  ${outcome.padEnd(10)} ${oneLine(job.command, 60)}`;
 }
 
-export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFile: () => string | undefined): void {
+/** Accepts ISO-8601, "YYYY-MM-DD HH:MM" and bare "HH:MM" (next occurrence). */
+export function parseAt(value: string, now = Date.now()): number {
+	const trimmed = value.trim();
+	const hhmm = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+	if (hhmm) {
+		const hours = Number(hhmm[1]);
+		const minutes = Number(hhmm[2]);
+		if (hours > 23 || minutes > 59) throw new Error(`Invalid time "${value}"`);
+		const target = new Date(now);
+		target.setHours(hours, minutes, 0, 0);
+		if (target.getTime() <= now) target.setDate(target.getDate() + 1);
+		return target.getTime();
+	}
+	const parsed = Date.parse(trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T"));
+	if (Number.isNaN(parsed)) throw new Error(`Could not parse "${value}" as a time. Use "HH:MM" or an ISO-8601 timestamp.`);
+	return parsed;
+}
+
+export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
+	const { store, waits, getSessionFile } = deps;
+
 	pi.registerTool({
 		name: "bg_start",
 		label: "Background job",
@@ -30,10 +60,11 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 			"Use this for any command expected to run longer than about 60 seconds: training runs, builds, " +
 			"long test suites, servers, downloads. The job keeps running even if pi exits. " +
 			"stdout and stderr are written to a log file, not into this conversation. " +
-			"Returns a job id to use with the other bg_* tools.",
+			"Returns a job id. To wait for it, call bg_wait and end your turn.",
 		promptSnippet: "Start a long-running command in the background and get a job id back immediately",
 		promptGuidelines: [
 			"Use bg_start instead of bash for any command expected to take more than ~60 seconds. bash blocks the whole session until the command finishes.",
+			"After bg_start, use bg_wait to be woken when the job finishes. Never poll bg_logs or sleep in a loop to check on a job.",
 		],
 		parameters: Type.Object({
 			command: Type.String({ description: "Shell command to run" }),
@@ -42,12 +73,7 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const cwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
-			const job = store.start({
-				command: params.command,
-				cwd,
-				name: params.name,
-				sessionFile: getSessionFile(),
-			});
+			const job = store.start({ command: params.command, cwd, name: params.name, sessionFile: getSessionFile() });
 			const lines = [
 				`Started background job ${job.id} (pid ${job.pid}) at ${formatClock(job.startedAt)}.`,
 				`  command: ${oneLine(job.command, 200)}`,
@@ -55,8 +81,119 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 				`  log:     ${job.logPath}`,
 				"",
 				"The job is detached and survives pi restarts. Do not tail or poll the log.",
+				`To be notified when it finishes, call bg_wait with job="${job.id}" and then end your turn.`,
 			];
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { job } };
+		},
+	});
+
+	pi.registerTool({
+		name: "bg_wait",
+		label: "Wait for wake-up",
+		description:
+			"Register a wake-up condition and return immediately. This does NOT block. " +
+			"After calling it you must end your turn and stop working: no further tool calls, no summary that keeps going. " +
+			"You will be sent a notification message the moment the condition fires, containing the job status, " +
+			"the tail of its log, and the note you leave here. Waiting costs no tokens, so prefer one long wait over repeated short ones. " +
+			"Conditions can be combined; whichever happens first wakes you.",
+		promptSnippet: "Sleep until a job finishes, a log line matches, a file appears, or a time is reached",
+		promptGuidelines: [
+			"Use bg_wait to wait for background work. It costs nothing while waiting, unlike sleeping in bash or repeatedly calling bg_logs.",
+			"After calling bg_wait, end your turn immediately. You will be woken with the job status and log tail already included.",
+			"Prefer waiting on a condition (job exit, or log_pattern for a metric line) over waiting on a fixed number of seconds.",
+		],
+		parameters: Type.Object({
+			note: Type.String({
+				description:
+					"A message to your future self, returned verbatim when you wake. Say what you were doing and what to do next.",
+			}),
+			job: Type.Optional(Type.String({ description: "Job id or name: wake when this job stops running" })),
+			log_pattern: Type.Optional(
+				Type.String({
+					description:
+						"Regular expression: wake when NEW output of the job's log matches it, e.g. 'eval_loss' or 'Traceback'. Requires job.",
+				}),
+			),
+			after_seconds: Type.Optional(Type.Number({ description: "Wake this many seconds from now" })),
+			at: Type.Optional(Type.String({ description: 'Wake at a wall-clock time: "HH:MM" or an ISO-8601 timestamp' })),
+			file: Type.Optional(Type.String({ description: "Wake when this path appears or its mtime changes" })),
+			max_wait_seconds: Type.Optional(
+				Type.Number({ description: "Safety net: wake even if nothing else fired (default: none)" }),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const now = Date.now();
+			if (params.log_pattern && !params.job) {
+				throw new Error("log_pattern requires job. Pass the job id whose log should be watched.");
+			}
+			if (params.log_pattern) {
+				try {
+					new RegExp(params.log_pattern);
+				} catch (err) {
+					throw new Error(`log_pattern is not a valid regular expression: ${err instanceof Error ? err.message : err}`);
+				}
+			}
+
+			let job: JobRecord | undefined;
+			if (params.job) {
+				job = store.resolve(params.job, ctx.cwd);
+				if (!job) throw new Error(`No background job matching "${params.job}". Use bg_list to see available jobs.`);
+				store.check(job.id);
+				job = store.resolve(job.id) ?? job;
+
+				// Nothing to wait for: answer now rather than spending a wake turn on it.
+				if (job.status !== "running" && !params.after_seconds && !params.at && !params.file) {
+					const tail = store.readLog(job, { tail: 25 });
+					const text = [
+						`Job ${job.id} already finished, so there is nothing to wait for.`,
+						`${job.id}: ${describeStatus(job, now)}`,
+						"",
+						tail.lines.length > 0 ? `log tail:\n${tail.lines.join("\n")}` : "log is empty",
+					].join("\n");
+					return { content: [{ type: "text", text }], details: { job, registered: false } };
+				}
+			}
+
+			const deadlines: number[] = [];
+			if (params.after_seconds !== undefined) {
+				const seconds = Math.min(Math.max(params.after_seconds, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS);
+				deadlines.push(now + seconds * 1000);
+			}
+			if (params.at !== undefined) deadlines.push(parseAt(params.at, now));
+
+			const filePath = params.file ? path.resolve(ctx.cwd, params.file) : undefined;
+			if (deadlines.length === 0 && !job && !filePath) {
+				throw new Error("bg_wait needs at least one condition: job, after_seconds, at, or file.");
+			}
+
+			const wait = waits.register({
+				note: params.note,
+				cwd: ctx.cwd,
+				sessionFile: getSessionFile(),
+				jobId: job?.id,
+				logPattern: params.log_pattern,
+				filePath,
+				deadlineAt: deadlines.length > 0 ? Math.min(...deadlines) : undefined,
+				maxWaitUntil:
+					params.max_wait_seconds !== undefined
+						? now + Math.min(Math.max(params.max_wait_seconds, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS) * 1000
+						: undefined,
+			});
+
+			const conditions: string[] = [];
+			if (job && !params.log_pattern) conditions.push(`job ${job.id} stops running`);
+			if (job && params.log_pattern) conditions.push(`job ${job.id} log matches /${params.log_pattern}/, or the job stops running`);
+			if (filePath) conditions.push(`${filePath} appears or changes`);
+			if (wait.deadlineAt) conditions.push(`the clock reaches ${formatClock(wait.deadlineAt)}`);
+			if (wait.maxWaitUntil) conditions.push(`at the latest ${formatClock(wait.maxWaitUntil)}`);
+
+			const text = [
+				`Wake condition ${wait.id} registered. You will be woken when ${conditions.join(", or ")}.`,
+				"",
+				"End your turn now. Do not call more tools and do not keep working on this thread.",
+				"Waiting is free: no tokens are spent until you are woken.",
+			].join("\n");
+			return { content: [{ type: "text", text }], details: { wait, registered: true } };
 		},
 	});
 
@@ -79,10 +216,20 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 				return { content: [{ type: "text", text: "No background jobs." }], details: { jobs: [] } };
 			}
 			const now = Date.now();
-			const text = jobs.map((j) => jobLine(j, now)).join("\n");
-			const runningCount = jobs.filter((j) => j.status === "running").length;
+			const pending = waits.list();
+			const footer =
+				pending.length > 0
+					? `\n\n${pending.length} pending wake condition(s); you will be notified, do not poll.`
+					: "";
 			return {
-				content: [{ type: "text", text: `${jobs.length} job(s), ${runningCount} running:\n${text}` }],
+				content: [
+					{
+						type: "text",
+						text: `${jobs.length} job(s), ${jobs.filter((j) => j.status === "running").length} running:\n${jobs
+							.map((j) => jobLine(j, now))
+							.join("\n")}${footer}`,
+					},
+				],
 				details: { jobs },
 			};
 		},
@@ -93,7 +240,8 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 		label: "Background job logs",
 		description:
 			"Read the tail of a background job's log. Only use this after a wake notification tells you something " +
-			"happened, or when the user explicitly asks about the log. Never call this in a loop to check progress.",
+			"happened and you need output beyond the tail already included in that notification, or when the user asks. " +
+			"Never call this in a loop to check progress: use bg_wait instead.",
 		promptSnippet: "Read the tail of a background job's log after being notified",
 		parameters: Type.Object({
 			job: Type.String({ description: "Job id or name from bg_start" }),
@@ -130,10 +278,7 @@ export function registerJobTools(pi: ExtensionAPI, store: JobStore, getSessionFi
 			const signal = (params.signal ?? "SIGTERM") as NodeJS.Signals;
 			const result = store.kill(job, signal);
 			if (!result.ok) throw new Error(`Could not signal ${job.id}: ${result.error}`);
-			return {
-				content: [{ type: "text", text: `Sent ${signal} to ${job.id} (pid ${job.pid}).` }],
-				details: { job, signal },
-			};
+			return { content: [{ type: "text", text: `Sent ${signal} to ${job.id} (pid ${job.pid}).` }], details: { job, signal } };
 		},
 	});
 }
