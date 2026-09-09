@@ -169,6 +169,30 @@ export function inspectBackgroundLaunch(command: string, config: LongrunConfig):
 }
 
 /**
+ * Enforce the user's own command allowlist for bg_start.
+ *
+ * bg_start runs arbitrary shell, so an auto-approval extension that exempts it
+ * by name is exempting everything. This gives the user a way to make that
+ * exemption bounded: the allowlist is checked here, inside the tool that asked
+ * to be trusted. Returns an error message when the command is not allowed.
+ */
+export function checkCommandAllowlist(command: string, config: LongrunConfig): string | undefined {
+	if (config.commandAllowlist.length === 0) return undefined;
+	for (const pattern of config.commandAllowlist) {
+		try {
+			if (new RegExp(pattern).test(command)) return undefined;
+		} catch {
+			/* an unparseable pattern must not silently widen the allowlist */
+		}
+	}
+	return (
+		`bg_start refused "${oneLine(command, 80)}": this project restricts background jobs to commands matching ` +
+		`${config.commandAllowlist.map((p) => `/${p}/`).join(", ")}. ` +
+		"Run it with bash instead, or ask the user to add it to commandAllowlist in .pi/longrun.json."
+	);
+}
+
+/**
  * Escalating minimum wait, so a model that keeps asking "is it done yet?" every
  * 30 seconds is slowed down by the runtime rather than by its own judgement.
  */

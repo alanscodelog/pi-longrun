@@ -18,6 +18,15 @@ import { WakeNotifier } from "./wake.js";
 /** Give the session a moment to settle before a wake can trigger a turn. */
 const STARTUP_EVALUATION_DELAY_MS = 750;
 
+/**
+ * pi-automode registers this tool. Its classifier sees only a tool name and its
+ * arguments, and its unconditional hard-deny list covers "adding persistence
+ * such as ... background agents" -- which is a fair description of what
+ * bg_start does. That rule cannot be overridden by intent or allow prose, so
+ * bg_start has to be named in pi-automode's own permissions.allow to run at all.
+ */
+const AUTOMODE_TOOL = "automode_inspect";
+
 export default function (pi: ExtensionAPI) {
 	const store = new JobStore();
 	const waits = new WaitWatcher(store, store.root);
@@ -100,6 +109,13 @@ export default function (pi: ExtensionAPI) {
 
 		if (store.running(ctx.cwd).length > 0) store.ensurePolling();
 		ui.refresh();
+
+		if (config.automodeHint && config.commandAllowlist.length === 0 && hasAutomode(pi)) {
+			ui.notify(
+				"pi-automode is active: bg_start needs \"bg_start\" in its permissions.allow, and a commandAllowlist here to keep that exemption bounded. See the pi-longrun README.",
+				"warning",
+			);
+		}
 	});
 
 	// Block the two habits that turn a long job into a token sink.
@@ -131,6 +147,14 @@ export default function (pi: ExtensionAPI) {
 		store.stopPolling();
 		ui.detach();
 	});
+}
+
+function hasAutomode(pi: ExtensionAPI): boolean {
+	try {
+		return pi.getAllTools().some((tool) => tool.name === AUTOMODE_TOOL);
+	} catch {
+		return false;
+	}
 }
 
 export { JobStore, jobLine };

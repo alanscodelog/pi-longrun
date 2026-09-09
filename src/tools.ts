@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatBytes, formatClock, formatDuration, oneLine } from "./format.js";
 import type { LongrunConfig } from "./config.js";
-import { normalizeJobCommand, type WaitBackoff } from "./guards.js";
+import { checkCommandAllowlist, normalizeJobCommand, type WaitBackoff } from "./guards.js";
 import type { JobRecord, JobStore } from "./jobs.js";
 import { extractMetrics, formatMetrics, summarizeJob } from "./metrics.js";
 import type { WaitWatcher } from "./waits.js";
@@ -84,6 +84,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			const cwd = params.cwd?.trim() ? path.resolve(ctx.cwd, params.cwd.trim()) : ctx.cwd;
 			const normalized = normalizeJobCommand(params.command);
 			if (normalized.command.length === 0) throw new Error("The command is empty after removing redundant backgrounding.");
+			const refusal = checkCommandAllowlist(normalized.command, getConfig());
+			if (refusal) throw new Error(refusal);
 			const job = store.start({ command: normalized.command, cwd, name: params.name, sessionFile: getSessionFile() });
 			const lines = [
 				`Started background job ${job.id} (pid ${job.pid}) at ${formatClock(job.startedAt)}.`,

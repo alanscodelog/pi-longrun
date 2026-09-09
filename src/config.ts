@@ -31,6 +31,15 @@ export interface LongrunConfig {
 	progressPattern: string;
 	/** bash commands matching these regexes are rejected with a pointer to bg_start. */
 	autoBackgroundPatterns: string[];
+	/**
+	 * When non-empty, bg_start only runs commands matching one of these regexes.
+	 * Set this when an auto-approval extension (pi-automode) has bg_start on its
+	 * allowlist, so the exemption covers a known set of commands rather than an
+	 * unrestricted shell.
+	 */
+	commandAllowlist: string[];
+	/** Warn once per session when pi-automode is active and no command allowlist is set. */
+	automodeHint: boolean;
 }
 
 export const DEFAULT_CONFIG: LongrunConfig = {
@@ -45,6 +54,8 @@ export const DEFAULT_CONFIG: LongrunConfig = {
 	maxMetrics: 10,
 	progressPattern: "\\b(\\d+)\\s*/\\s*(\\d+)\\b",
 	autoBackgroundPatterns: [],
+	commandAllowlist: [],
+	automodeHint: true,
 };
 
 function readJson(file: string): Partial<LongrunConfig> | undefined {

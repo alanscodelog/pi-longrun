@@ -90,6 +90,66 @@ primitive があってもモデルが使わなければ意味がないので、�
 さらに毎ターン、実行中ジョブと登録済みの起床条件を system prompt に注入する。
 モデルが状況を確認するために `bg_list` を呼ぶ必要をなくすため。
 
+## pi-automode と併用する
+
+[pi-automode](https://github.com/czottmann/pi-automode) を on にしていると **`bg_start` がブロックされる**。
+原因は名前衝突でもバグでもなく、意味的に正しい衝突:
+
+- automode は tool 名と引数だけを分類器に渡す (`{"toolName":"bg_start","input":{…}}`)。
+  tool の description は見ていない。
+- 分類器の **hard-deny** 既定ルールに
+  *"Adding persistence such as SSH authorized keys, shell profile modifications, cron jobs,
+  launch agents, login items, **or background agents**."* がある。
+- `bg_start` は detached でプロセスを起動し pi の終了後も生き残る。これは上のルールの記述そのもの。
+- **hard-deny は無条件**で、`autoMode.allow` のプロンプトルールやユーザの意図では上書きできない
+  (automode の分類器プロンプト: *"HARD_DENY rules block unconditionally"*)。
+
+つまり `autoMode.allow` に何を書いても直らない。効くのは**分類器より前段**にある
+`permissions.allow` の決定論的な許可レイヤだけ。
+
+### 1. automode 側
+
+`~/.pi/agent/extensions/pi-automode/config.json` (またはプロジェクトの `.pi/automode.local.json`) に:
+
+```json
+{
+  "permissions": {
+    "allow": ["bg_start", "bg_wait", "bg_list", "bg_logs", "bg_kill"]
+  }
+}
+```
+
+`bg_wait` / `bg_list` / `bg_logs` / `bg_kill` は入れなくても分類器が通す可能性が高いが、
+入れておくと毎回の分類器呼び出し (レイテンシとトークン) を省ける。
+`bg_kill` が安全なのは、シグナルを送れる相手が **この extension が起動したジョブに限られる**ため
+(ジョブ台帳に無い pid は指定できない)。
+
+共有される `.pi/automode.json` には書けない (automode が `permissions.allow` を拒否する)。
+
+### 2. pi-longrun 側 — 免除の範囲を絞る
+
+`permissions.allow` に `bg_start` を入れるということは、**任意のシェルコマンドが automode の
+bash レビューを迂回できる**ということでもある。`bg_start(command)` は結局シェルを実行するので、
+名前だけの許可は「bash を無条件許可する」のとほぼ等しい。
+
+そこで `.pi/longrun.json` の `commandAllowlist` で、bg_start 自身が受け付けるコマンドを絞る:
+
+```json
+{
+  "commandAllowlist": [
+    "^npm run (build|test)\\b",
+    "^python train\\.py\\b",
+    "^\\./scripts/"
+  ]
+}
+```
+
+これで automode への免除は「この正規表現に合うコマンド」に限定される。
+判定は extension 側 (免除を受けている当人) で行うので、automode の設定を緩めずに済む。
+
+`commandAllowlist` が空のまま automode を検出した場合、セッション開始時に一度だけ警告を出す
+(`"automodeHint": false` で抑止できる)。
+
 ## 設定
 
 `.pi/longrun.json` (プロジェクト) または `~/.pi/agent/longrun.json` (ユーザ)。全て任意。
@@ -108,7 +168,9 @@ primitive があってもモデルが使わなければ意味がないので、�
   ],
   "maxMetrics": 10,
   "progressPattern": "\\b(\\d+)\\s*/\\s*(\\d+)\\b",
-  "autoBackgroundPatterns": ["^python train\\.py"]  // bash で走らせず bg_start に誘導
+  "autoBackgroundPatterns": ["^python train\\.py"], // bash で走らせず bg_start に誘導
+  "commandAllowlist": [],         // 空 = 制限なし。pi-automode 併用時は設定推奨 (上記参照)
+  "automodeHint": true            // automode 検出時の警告
 }
 ```
 
@@ -137,6 +199,10 @@ npm run dev            # pi -e ./src/index.ts
 node bench/run.mjs --label A-baseline --no-ext --prompt-file bench/prompts/monitor.txt
 node bench/run.mjs --label B-longrun            --prompt-file bench/prompts/monitor.txt
 ```
+
+`pi -p` はパイプされた stdin の EOF を待つので、スクリプトから呼ぶときは `< /dev/null` を付ける
+(付けないと extension の有無に関係なく終了しない)。`bench/run.mjs` は RPC mode で stdin を自前で
+管理しているのでこの影響を受けない。
 
 状態の置き場所:
 
