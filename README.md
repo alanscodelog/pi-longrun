@@ -32,7 +32,7 @@ pi の built-in `bash` にはバックグラウンド実行もデフォルトタ
 ## インストール
 
 ```bash
-pi install git:github.com/<user>/pi-longrun     # または
+pi install git:github.com/takuma104/pi-longrun     # または
 pi install /path/to/pi-longrun
 ```
 
