@@ -81,3 +81,9 @@ gallery shows as a preview card; `video` wins if both are set.
 
 Note that `files` in `package.json` limits the tarball to `src/`, `docs/`, the README, and the
 licence — `test/` and `bench/` stay out.
+
+The pi packages this extension imports (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
+`typebox`) are declared as **optional** peer dependencies. pi aliases them into extensions at
+runtime, and leaving them non-optional makes npm install a second copy of the whole agent —
+192 MB against 176 KB — for every user. They are pinned in `devDependencies` instead, which is what
+the typecheck and the tests resolve against.

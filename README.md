@@ -1,6 +1,7 @@
 # pi-longrun
 
 [![CI](https://github.com/takuma104/pi-longrun/actions/workflows/ci.yml/badge.svg)](https://github.com/takuma104/pi-longrun/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pi-longrun)](https://www.npmjs.com/package/pi-longrun)
 
 Background jobs, wake-up conditions, and completion notifications for [pi](https://pi.dev/) —
 so the model spends **no tokens while a long job runs**.
@@ -35,11 +36,17 @@ job while this stays flat, so the gap widens by orders of magnitude on multi-hou
 ## Install
 
 ```bash
-pi install git:github.com/takuma104/pi-longrun     # or
+pi install npm:pi-longrun
+```
+
+Or straight from source:
+
+```bash
+pi install git:github.com/takuma104/pi-longrun
 pi install /path/to/pi-longrun
 ```
 
-Just to try it out:
+Just to try it out, without installing:
 
 ```bash
 pi -e /path/to/pi-longrun/src/index.ts
