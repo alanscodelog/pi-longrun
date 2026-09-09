@@ -16,7 +16,7 @@ function newPair(): { store: JobStore; waits: WaitWatcher; root: string } {
 }
 
 afterEach(() => {
-	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 async function until<T>(fn: () => T | undefined, timeoutMs = 10_000): Promise<T> {

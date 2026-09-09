@@ -107,14 +107,16 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 		label: "Wait for wake-up",
 		description:
 			"Register a wake-up condition and return immediately. This does NOT block. " +
-			"After calling it you must end your turn and stop working: no further tool calls, no summary that keeps going. " +
-			"You will be sent a notification message the moment the condition fires, containing the job status, " +
-			"the tail of its log, and the note you leave here. Waiting costs no tokens, so prefer one long wait over repeated short ones. " +
+			"Whenever this tool succeeds you WILL be woken exactly once, so end your turn and stop working: " +
+			"no further tool calls, no summary that keeps going. This holds even when the job has already finished " +
+			"by the time you call: the wake simply arrives right away. " +
+			"The notification contains the job status, the tail of its log, and the note you leave here. " +
+			"Waiting costs no tokens, so prefer one long wait over repeated short ones. " +
 			"Conditions can be combined; whichever happens first wakes you.",
 		promptSnippet: "Sleep until a job finishes, a log line matches, a file appears, or a time is reached",
 		promptGuidelines: [
 			"Use bg_wait to wait for background work. It costs nothing while waiting, unlike sleeping in bash or repeatedly calling bg_logs.",
-			"After calling bg_wait, end your turn immediately. You will be woken with the job status and log tail already included.",
+			"When bg_wait succeeds, end your turn immediately: a wake is guaranteed and it carries the job status and log tail. When bg_wait returns an error, no wake is coming, so handle the error instead of ending your turn.",
 			"Prefer waiting on a condition (job exit, or log_pattern for a metric line) over waiting on a fixed number of seconds.",
 		],
 		parameters: Type.Object({
@@ -157,16 +159,18 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				store.check(job.id);
 				job = store.resolve(job.id) ?? job;
 
-				// Nothing to wait for: answer now rather than spending a wake turn on it.
-				if (job.status !== "running" && !params.after_seconds && !params.at && !params.file) {
-					const tail = store.readLog(job, { tail: 25 });
-					const text = [
-						`Job ${job.id} already finished, so there is nothing to wait for.`,
-						`${job.id}: ${describeStatus(job, now)}`,
-						"",
-						tail.lines.length > 0 ? `log tail:\n${tail.lines.join("\n")}` : "log is empty",
-					].join("\n");
-					return { content: [{ type: "text", text }], details: { job, registered: false } };
+				// A job that finished before the model got here still gets a wake. Returning
+				// the result inline instead would break the one contract this tool has --
+				// "call it and you will be woken" -- and a model that dutifully ends its turn
+				// on a tool that quietly registered nothing waits forever.
+				if (job.status !== "running") {
+					const attempts = backoff.noteWaitOnFinishedJob(job.id);
+					if (attempts > 1) {
+						throw new Error(
+							`Job ${job.id} ${describeStatus(job, now)}, and you have already been woken with its result. ` +
+								"Use that result instead of waiting for it again.",
+						);
+					}
 				}
 			}
 
@@ -215,15 +219,23 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				}
 			}
 
+			const alreadyFinished = job !== undefined && job.status !== "running";
 			const conditions: string[] = [];
-			if (job && !params.log_pattern) conditions.push(`job ${job.id} stops running`);
-			if (job && params.log_pattern) conditions.push(`job ${job.id} log matches /${params.log_pattern}/, or the job stops running`);
-			if (filePath) conditions.push(`${filePath} appears or changes`);
-			if (wait.deadlineAt) conditions.push(`the clock reaches ${formatClock(wait.deadlineAt)}`);
+			if (alreadyFinished && job) {
+				conditions.push(`immediately, because job ${job.id} has already finished`);
+			} else if (job && params.log_pattern) {
+				conditions.push(`when job ${job.id} log matches /${params.log_pattern}/, or when it stops running`);
+			} else if (job) {
+				conditions.push(`when job ${job.id} stops running`);
+			}
+			if (filePath) conditions.push(`when ${filePath} appears or changes`);
+			if (wait.deadlineAt) conditions.push(`when the clock reaches ${formatClock(wait.deadlineAt)}`);
 			if (wait.maxWaitUntil) conditions.push(`at the latest ${formatClock(wait.maxWaitUntil)}`);
 
+			waits.poke();
+
 			const text = [
-				`Wake condition ${wait.id} registered. You will be woken when ${conditions.join(", or ")}.`,
+				`Wake condition ${wait.id} registered. You will be woken ${conditions.join(", or ")}.`,
 				...(patternHint ? ["", patternHint] : []),
 				...(escalatedTo !== undefined
 					? [

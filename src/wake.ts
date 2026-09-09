@@ -43,6 +43,11 @@ function renderEvent(event: WakeEvent, store: JobStore, config: LongrunConfig, i
 	switch (reason.kind) {
 		case "job_exit": {
 			lines.push(`${label}job ${reason.job.id} ${describeStatus(reason.job, event.firedAt)}`);
+			// The job finished before the wait existed. Saying so stops the model
+			// reading the instant wake as "something just happened".
+			if (reason.job.endedAt !== undefined && reason.job.endedAt <= event.wait.createdAt) {
+				lines.push("   note: it had already finished when you called bg_wait, so this wake is immediate");
+			}
 			// Waking on exit while a pattern was pending means the pattern never hit.
 			// Say so, otherwise the model assumes its regex was the thing that fired.
 			if (event.wait.logPattern) {

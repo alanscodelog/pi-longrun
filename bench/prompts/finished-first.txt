@@ -1,0 +1,9 @@
+Do these steps in order, using the background job tools.
+
+1. Start a background job that runs: echo FIRST-DONE
+2. Wait for that job with bg_wait.
+3. When you are woken, start a second background job that runs: echo SECOND-DONE
+4. Wait for that job with bg_wait.
+5. When you are woken, report both jobs' output.
+
+End your final reply with BENCH_DONE on its own line.

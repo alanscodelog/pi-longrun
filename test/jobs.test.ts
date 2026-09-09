@@ -11,7 +11,7 @@ function newStore(): JobStore {
 }
 
 afterEach(() => {
-	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 async function waitForExit(store: JobStore, id: string, timeoutMs = 10_000) {

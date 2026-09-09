@@ -8,7 +8,7 @@ const cfg = DEFAULT_CONFIG;
 const roots: string[] = [];
 
 afterEach(() => {
-	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 describe("extractMetrics", () => {

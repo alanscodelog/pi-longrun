@@ -144,6 +144,21 @@ export class WaitWatcher {
 		return wait;
 	}
 
+	/**
+	 * Evaluate now instead of waiting for the next tick. Used right after
+	 * registering, so a condition that is already true (the job finished before
+	 * the model got around to calling bg_wait) wakes without a second of dead time.
+	 */
+	poke(): void {
+		let events: WakeEvent[] = [];
+		try {
+			events = this.evaluate();
+		} catch {
+			return;
+		}
+		if (events.length > 0) this.onWake?.(events);
+	}
+
 	cancel(id: string): boolean {
 		if (!this.waits.has(id)) return false;
 		this.forget(id);

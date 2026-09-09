@@ -5,12 +5,18 @@ import { DEFAULT_CONFIG, type LongrunConfig } from "../src/config.js";
 import { WaitBackoff } from "../src/guards.js";
 import { JobStore, tmpStoreRoot } from "../src/jobs.js";
 import { registerTools } from "../src/tools.js";
-import { WaitWatcher } from "../src/waits.js";
+import { type WakeEvent, WaitWatcher } from "../src/waits.js";
 
 const roots: string[] = [];
+const stores: JobStore[] = [];
 
 afterEach(() => {
-	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+	// Detached jobs keep writing to the log directory; stop them before removing it.
+	for (const store of stores.splice(0)) {
+		for (const job of store.running()) store.kill(job, "SIGKILL");
+		store.dispose();
+	}
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 type Tool = {
@@ -29,6 +35,7 @@ function harness(config: LongrunConfig) {
 	const root = tmpStoreRoot();
 	roots.push(root);
 	const store = new JobStore(root);
+	stores.push(store);
 	const waits = new WaitWatcher(store, root);
 	const tools = new Map<string, Tool>();
 	const pi = {
@@ -87,17 +94,38 @@ describe("bg_start", () => {
 });
 
 describe("bg_wait", () => {
-	it("answers immediately when the job has already finished", async () => {
+	it("still registers a wake when the job finished before the call", async () => {
+		// The deadlock this guards against: bg_wait answering inline while the model
+		// dutifully ends its turn on the standing "always end your turn" instruction.
 		const { call, store, waits } = harness(DEFAULT_CONFIG);
 		const { details } = await call("bg_start", { command: "echo done-already" });
 		const job = (details as { job: { id: string } }).job;
 		await new Promise((r) => setTimeout(r, 400));
+		expect(store.resolve(job.id)?.status).toBe("exited");
+
+		const wakes: WakeEvent[][] = [];
+		waits.start((events) => wakes.push(events));
 
 		const result = await call("bg_wait", { job: job.id, note: "n" });
-		expect(result.text).toContain("already finished");
-		expect(result.text).toContain("done-already");
-		// No wake condition is registered for a job that cannot fire one.
+		expect(result.text).toContain("End your turn now");
+		expect(result.text).toContain("immediately, because job");
+		// The wake fires from the registration itself, not a tick later.
+		expect(wakes).toHaveLength(1);
+		expect(wakes[0]?.[0]?.reason.kind).toBe("job_exit");
 		expect(waits.list()).toHaveLength(0);
+	});
+
+	it("refuses a second wait on a job it already reported", async () => {
+		const { call, store } = harness(DEFAULT_CONFIG);
+		const { details } = await call("bg_start", { command: "echo once" });
+		const job = (details as { job: { id: string } }).job;
+		await new Promise((r) => setTimeout(r, 400));
+		store.check(job.id);
+
+		await call("bg_wait", { job: job.id, note: "first" });
+		await expect(call("bg_wait", { job: job.id, note: "second" })).rejects.toThrow(
+			/already been woken with its result/,
+		);
 	});
 
 	it("registers a condition and tells the model to stop", async () => {

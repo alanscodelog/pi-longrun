@@ -199,6 +199,8 @@ export function checkCommandAllowlist(command: string, config: LongrunConfig): s
 export class WaitBackoff {
 	private consecutive = 0;
 	private lastJobId: string | undefined;
+	/** How many waits have been registered against a job that had already finished. */
+	private readonly finishedJobWaits = new Map<string, number>();
 
 	constructor(private readonly getConfig: () => LongrunConfig) {}
 
@@ -212,6 +214,18 @@ export class WaitBackoff {
 		this.consecutive++;
 		const seconds = Math.max(requestedSeconds, floor);
 		return { seconds, escalated: seconds > requestedSeconds };
+	}
+
+	/**
+	 * Waiting for a job that has already finished is legitimate once: it is the
+	 * race this extension exists to absorb, and the wake fires immediately.
+	 * Doing it again means the model is spinning on a result it already has.
+	 * Deliberately not cleared by reset(), which fires on every real wake.
+	 */
+	noteWaitOnFinishedJob(jobId: string): number {
+		const count = (this.finishedJobWaits.get(jobId) ?? 0) + 1;
+		this.finishedJobWaits.set(jobId, count);
+		return count;
 	}
 
 	/** A real event (job exit, log match, file) means the model was not just spinning. */
