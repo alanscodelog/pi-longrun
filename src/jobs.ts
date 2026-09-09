@@ -295,7 +295,10 @@ export class JobStore {
 		try {
 			const raw = fs.readFileSync(job.statusPath, "utf8").trim();
 			const code = Number.parseInt(raw, 10);
-			const endedAt = fs.statSync(job.statusPath).mtimeMs;
+			// mtimeMs comes from the filesystem clock with sub-millisecond precision,
+			// while startedAt is a whole-millisecond Date.now(). A job that finishes
+			// inside the millisecond it started in would otherwise end before it began.
+			const endedAt = Math.max(Math.round(fs.statSync(job.statusPath).mtimeMs), job.startedAt);
 			return { code: Number.isNaN(code) ? -1 : code, endedAt };
 		} catch {
 			return undefined;
