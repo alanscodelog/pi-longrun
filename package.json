@@ -4,6 +4,24 @@
 	"description": "Background jobs and scheduled wakeups for the pi coding agent",
 	"type": "module",
 	"license": "MIT",
+	"author": "Takuma Mori",
+	"homepage": "https://github.com/takuma104/pi-longrun#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/takuma104/pi-longrun.git"
+	},
+	"bugs": {
+		"url": "https://github.com/takuma104/pi-longrun/issues"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"files": [
+		"src",
+		"docs",
+		"README.md",
+		"LICENSE"
+	],
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
@@ -13,6 +31,11 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest --run",
 		"dev": "pi -e ./src/index.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-coding-agent": "^0.74.2",

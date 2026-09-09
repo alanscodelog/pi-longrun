@@ -1,5 +1,7 @@
 # pi-longrun
 
+[![CI](https://github.com/takuma104/pi-longrun/actions/workflows/ci.yml/badge.svg)](https://github.com/takuma104/pi-longrun/actions/workflows/ci.yml)
+
 Background jobs, wake-up conditions, and completion notifications for [pi](https://pi.dev/) —
 so the model spends **no tokens while a long job runs**.
 

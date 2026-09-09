@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: ["20", "22", "24"]
+        include:
+          # The jobs this extension spawns are detached process groups, so the
+          # platform matters more than usual. macOS is the primary dev target.
+          - os: macos-latest
+            node: "22"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      # No lockfile is committed, so this resolves fresh against the pi packages
+      # each run -- which is also how a user installing the extension gets them.
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
