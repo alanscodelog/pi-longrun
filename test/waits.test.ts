@@ -149,6 +149,11 @@ describe("formatWake", () => {
 		waits.register({ note: "b", cwd: process.cwd(), jobId: bad.id });
 
 		const events = await until(() => {
+			// Both jobs have to be finished before the first evaluate(): it fires and
+			// forgets whatever is ready, so evaluating while one job is still running
+			// consumes that wait on its own and the two can never coalesce.
+			if (store.check(ok.id)?.status === "running") return undefined;
+			if (store.check(bad.id)?.status === "running") return undefined;
 			const e = waits.evaluate();
 			return e.length === 2 ? e : undefined;
 		});
