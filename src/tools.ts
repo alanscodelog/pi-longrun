@@ -32,7 +32,7 @@ export function describeStatus(job: JobRecord, now = Date.now()): string {
 	return `${job.status} after ${ran} with exit code ${job.exitCode ?? "?"}`;
 }
 
-/** One line per job, dense enough to keep bg_list cheap in context. */
+/** One line per job, dense enough to keep bg_task_list cheap in context. */
 export function jobLine(job: JobRecord, now = Date.now()): string {
 	const marker = job.status === "running" ? "▶" : job.exitCode === 0 ? "✓" : "✗";
 	const age = formatDuration((job.status === "running" ? now : (job.endedAt ?? now)) - job.startedAt);
@@ -62,18 +62,18 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 	const { store, waits, backoff, getConfig, getSessionFile } = deps;
 
 	pi.registerTool({
-		name: "bg_start",
+		name: "bg_task_start",
 		label: "Background job",
 		description:
 			"Start a shell command as a detached background job and return immediately. " +
 			"Use this for any command expected to run longer than about 60 seconds: training runs, builds, " +
 			"long test suites, servers, downloads. The job keeps running even if pi exits. " +
 			"stdout and stderr are written to a log file, not into this conversation. " +
-			"Returns a job id. To wait for it, call bg_wait and end your turn.",
+			"Returns a job id. To wait for it, call bg_task_wait and end your turn.",
 		promptSnippet: "Start a long-running command in the background and get a job id back immediately",
 		promptGuidelines: [
-			"Use bg_start instead of bash for any command expected to take more than ~60 seconds. bash blocks the whole session until the command finishes.",
-			"After bg_start, use bg_wait to be woken when the job finishes. Never poll bg_logs or sleep in a loop to check on a job.",
+			"Use bg_task_start instead of bash for any command expected to take more than ~60 seconds. bash blocks the whole session until the command finishes.",
+			"After bg_task_start, use bg_task_wait to be woken when the job finishes. Never poll bg_task_logs or sleep in a loop to check on a job.",
 		],
 		parameters: Type.Object({
 			command: Type.String({ description: "Shell command to run" }),
@@ -96,14 +96,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				...normalized.notes.map((note) => `  note: ${note}`),
 				normalized.notes.length > 0 ? "" : undefined,
 				"The job is detached and survives pi restarts. Do not tail or poll the log.",
-				`To be notified when it finishes, call bg_wait with job="${job.id}" and then end your turn.`,
+				`To be notified when it finishes, call bg_task_wait with job="${job.id}" and then end your turn.`,
 			].filter((l): l is string => l !== undefined);
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { job } };
 		},
 	});
 
 	pi.registerTool({
-		name: "bg_wait",
+		name: "bg_task_wait",
 		label: "Wait for wake-up",
 		description:
 			"Register a wake-up condition and return immediately. This does NOT block. " +
@@ -115,8 +115,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			"Conditions can be combined; whichever happens first wakes you.",
 		promptSnippet: "Sleep until a job finishes, a log line matches, a file appears, or a time is reached",
 		promptGuidelines: [
-			"Use bg_wait to wait for background work. It costs nothing while waiting, unlike sleeping in bash or repeatedly calling bg_logs.",
-			"When bg_wait succeeds, end your turn immediately: a wake is guaranteed and it carries the job status and log tail. When bg_wait returns an error, no wake is coming, so handle the error instead of ending your turn.",
+			"Use bg_task_wait to wait for background work. It costs nothing while waiting, unlike sleeping in bash or repeatedly calling bg_task_logs.",
+			"When bg_task_wait succeeds, end your turn immediately: a wake is guaranteed and it carries the job status and log tail. When bg_task_wait returns an error, no wake is coming, so handle the error instead of ending your turn.",
 			"Prefer waiting on a condition (job exit, or log_pattern for a metric line) over waiting on a fixed number of seconds.",
 		],
 		parameters: Type.Object({
@@ -155,7 +155,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 			let job: JobRecord | undefined;
 			if (params.job) {
 				job = store.resolve(params.job, ctx.cwd);
-				if (!job) throw new Error(`No background job matching "${params.job}". Use bg_list to see available jobs.`);
+				if (!job) throw new Error(`No background job matching "${params.job}". Use bg_task_list to see available jobs.`);
 				store.check(job.id);
 				job = store.resolve(job.id) ?? job;
 
@@ -187,7 +187,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 
 			const filePath = params.file ? path.resolve(ctx.cwd, params.file) : undefined;
 			if (deadlines.length === 0 && !job && !filePath) {
-				throw new Error("bg_wait needs at least one condition: job, after_seconds, at, or file.");
+				throw new Error("bg_task_wait needs at least one condition: job, after_seconds, at, or file.");
 			}
 
 			const wait = waits.register({
@@ -252,10 +252,10 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 	});
 
 	pi.registerTool({
-		name: "bg_list",
+		name: "bg_task_list",
 		label: "Background jobs",
 		description:
-			"List background jobs started with bg_start, newest first. Shows status, runtime and exit code. " +
+			"List background jobs started with bg_task_start, newest first. Shows status, runtime and exit code. " +
 			"Defaults to jobs from the current working directory.",
 		promptSnippet: "List background jobs and their status",
 		parameters: Type.Object({
@@ -295,21 +295,21 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 	});
 
 	pi.registerTool({
-		name: "bg_logs",
+		name: "bg_task_logs",
 		label: "Background job logs",
 		description:
 			"Read the tail of a background job's log. Only use this after a wake notification tells you something " +
 			"happened and you need output beyond the tail already included in that notification, or when the user asks. " +
-			"Never call this in a loop to check progress: use bg_wait instead.",
+			"Never call this in a loop to check progress: use bg_task_wait instead.",
 		promptSnippet: "Read the tail of a background job's log after being notified",
 		parameters: Type.Object({
-			job: Type.String({ description: "Job id or name from bg_start" }),
+			job: Type.String({ description: "Job id or name from bg_task_start" }),
 			tail: Type.Optional(Type.Number({ description: "Number of trailing lines (default 50, max 2000)" })),
 			grep: Type.Optional(Type.String({ description: "Only return lines matching this regular expression" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const job = store.resolve(params.job, ctx.cwd);
-			if (!job) throw new Error(`No background job matching "${params.job}". Use bg_list to see available jobs.`);
+			if (!job) throw new Error(`No background job matching "${params.job}". Use bg_task_list to see available jobs.`);
 			store.check(job.id);
 			const fresh = store.resolve(job.id) ?? job;
 			const slice = store.readLog(fresh, { tail: params.tail, grep: params.grep });
@@ -325,7 +325,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 	});
 
 	pi.registerTool({
-		name: "bg_kill",
+		name: "bg_task_kill",
 		label: "Kill background job",
 		description: "Send a signal to a background job's process group. Defaults to SIGTERM.",
 		promptSnippet: "Stop a background job",
@@ -335,7 +335,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const job = store.resolve(params.job, ctx.cwd);
-			if (!job) throw new Error(`No background job matching "${params.job}". Use bg_list to see available jobs.`);
+			if (!job) throw new Error(`No background job matching "${params.job}". Use bg_task_list to see available jobs.`);
 			const signal = (params.signal ?? "SIGTERM") as NodeJS.Signals;
 			const result = store.kill(job, signal);
 			if (!result.ok) throw new Error(`Could not signal ${job.id}: ${result.error}`);
