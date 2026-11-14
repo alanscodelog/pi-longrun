@@ -23,6 +23,10 @@ Calling `bg_wait` again on a job whose result has already been delivered is also
 for the same result twice is a spin, so the runtime stops it rather than letting the model discover
 it the slow way.
 
+The one exception is deliberate. `bg_task_wait_cancel` drops a pending wait, so the wake it
+promised never arrives. That is the model asking to take back a timer it no longer needs, and it is
+the tool-side counterpart of `/wakes clear`.
+
 ## Notifications are self-contained
 
 One wake-up costs one full-context turn. So the two things that matter are *waking up fewer times*

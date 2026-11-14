@@ -113,6 +113,17 @@ describe("WaitWatcher", () => {
 		expect(events[0]?.reason.kind).toBe("job_exit");
 	});
 
+	it("does not fire a wait after it is cancelled", async () => {
+		const { waits } = newPair();
+		const wait = waits.register({ note: "timer", cwd: process.cwd(), deadlineAt: Date.now() + 30 });
+		expect(waits.cancel(wait.id)).toBe(true);
+		expect(waits.list()).toHaveLength(0);
+
+		await new Promise((r) => setTimeout(r, 60));
+		expect(waits.evaluate()).toHaveLength(0);
+		expect(waits.cancel(wait.id)).toBe(false);
+	});
+
 	it("reports the earliest deadline for the footer", () => {
 		const { waits } = newPair();
 		const now = Date.now();

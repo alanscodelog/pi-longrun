@@ -19,6 +19,8 @@ export interface LongrunConfig {
 	 * waking early only re-reads the context without learning anything new.
 	 */
 	backoffFloorSeconds: number;
+	/** Keep backoffFloorSeconds as a floor, but stop doubling it on repeated timers. */
+	disableBackoff: boolean;
 	/** Inject the long-running work section into the system prompt. */
 	injectSystemPrompt: boolean;
 	/** Pull numeric key=value pairs out of log tails and put them in wake notifications. */
@@ -48,6 +50,7 @@ export const DEFAULT_CONFIG: LongrunConfig = {
 	maxBareSleepSeconds: 60,
 	maxCompoundSleepSeconds: 10,
 	backoffFloorSeconds: 60,
+	disableBackoff: false,
 	injectSystemPrompt: true,
 	extractMetrics: true,
 	metricPatterns: [],

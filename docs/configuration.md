@@ -11,6 +11,7 @@ defaults — a project file wins over a user file, and either wins over a defaul
   "maxBareSleepSeconds": 60,      // ceiling for a standalone sleep
   "maxCompoundSleepSeconds": 10,  // ceiling for a sleep combined with other commands
   "backoffFloorSeconds": 60,      // floor for a timer-only bg_wait (doubles on repeats)
+  "disableBackoff": false,        // keep the floor, stop doubling it on repeated timers
   "injectSystemPrompt": true,     // put running jobs and pending wakes in the system prompt
   "extractMetrics": true,         // pull key=value numbers out of log tails
   "metricPatterns": [             // for logs that are not key=value; capture group 1 is the value
@@ -60,10 +61,17 @@ stderr-only redirects are deliberate, and are kept.
 
 ### `backoffFloorSeconds`
 
-A `bg_wait` with only `after_seconds` is raised to at least this many seconds, and each consecutive
-short timer on the same job doubles the floor. Waking early only re-reads the context without
-learning anything new; Claude Code clamps its own equivalent to 60s for the same reason. Waits with
-a real condition (job exit, `log_pattern`, `file`) are not affected.
+A wake-up that asks for `after_seconds` below this many seconds is refused with an error, and
+nothing is registered, so a short timer can never start by accident. Each consecutive timer on the
+same job doubles the floor. Waking early only re-reads the context without learning anything new;
+Claude Code clamps its own equivalent to 60s for the same reason. Waits with a real condition (job
+exit, `log_pattern`, `file`) are not affected.
+
+### `disableBackoff`
+
+Stops the doubling but keeps `backoffFloorSeconds` as a floor: a fixed `after_seconds` at or above
+the floor then wakes at exactly that many seconds, however many timers came before it. Values below
+the floor are still refused.
 
 ## Metrics and progress
 

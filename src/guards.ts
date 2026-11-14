@@ -206,11 +206,16 @@ export class WaitBackoff {
 
 	/** Called for timer-only waits. Returns the seconds actually enforced. */
 	enforce(requestedSeconds: number, jobId: string | undefined): { seconds: number; escalated: boolean } {
+		const config = this.getConfig();
+		if (config.disableBackoff) {
+			const seconds = Math.max(requestedSeconds, config.backoffFloorSeconds);
+			return { seconds, escalated: seconds > requestedSeconds };
+		}
 		if (jobId !== this.lastJobId) {
 			this.lastJobId = jobId;
 			this.consecutive = 0;
 		}
-		const floor = Math.min(this.getConfig().backoffFloorSeconds * 2 ** this.consecutive, 30 * 60);
+		const floor = Math.min(config.backoffFloorSeconds * 2 ** this.consecutive, 30 * 60);
 		this.consecutive++;
 		const seconds = Math.max(requestedSeconds, floor);
 		return { seconds, escalated: seconds > requestedSeconds };

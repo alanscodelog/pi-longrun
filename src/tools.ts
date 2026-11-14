@@ -152,6 +152,15 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				}
 			}
 
+			const minTimerSeconds = Math.max(MIN_WAIT_SECONDS, getConfig().backoffFloorSeconds);
+			if (params.after_seconds !== undefined && params.after_seconds < minTimerSeconds) {
+				throw new Error(
+					`after_seconds=${params.after_seconds} is refused: the minimum timer is ${minTimerSeconds}s. ` +
+						"Do not use bg_task_wait for waits this short. Waking early only re-reads the whole context without learning anything new. " +
+						`Wait on the job, a log_pattern, or a file instead, or ask for at least ${minTimerSeconds}s.`,
+				);
+			}
+
 			let job: JobRecord | undefined;
 			if (params.job) {
 				job = store.resolve(params.job, ctx.cwd);
@@ -248,6 +257,34 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
 				"Waiting is free: no tokens are spent until you are woken.",
 			].join("\n");
 			return { content: [{ type: "text", text }], details: { wait, registered: true } };
+		},
+	});
+
+	pi.registerTool({
+		name: "bg_task_wait_cancel",
+		label: "Cancel wake-up",
+		description:
+			"Cancel a pending wake-up registered with bg_task_wait so it never fires. Takes the wait id " +
+			"returned by bg_task_wait and listed by /wakes. Use it when the condition no longer matters, for " +
+			"example after the job it was watching was replaced. Nothing wakes you for that condition afterwards, " +
+			"so register a new one if you still need to be woken.",
+		promptSnippet: "Cancel a pending wake-up by wait id",
+		parameters: Type.Object({
+			wait: Type.String({ description: "Wait id from bg_task_wait, as listed by /wakes" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const id = params.wait.trim();
+			if (!waits.cancel(id)) {
+				const pending = waits.list();
+				throw new Error(
+					`No pending wake condition "${id}". ` +
+						(pending.length > 0 ? `Pending: ${pending.map((w) => w.id).join(", ")}.` : "Nothing is pending."),
+				);
+			}
+			return {
+				content: [{ type: "text", text: `Cancelled wake condition ${id}. It will not fire.` }],
+				details: { waitId: id, cancelled: true },
+			};
 		},
 	});
 

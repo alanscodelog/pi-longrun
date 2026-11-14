@@ -84,6 +84,13 @@ describe("WaitBackoff", () => {
 		expect(backoff.enforce(3600, "a")).toEqual({ seconds: 3600, escalated: false });
 		expect(backoff.enforce(30, "b")).toEqual({ seconds: 60, escalated: true });
 	});
+
+	it("stops doubling when backoff is disabled, but keeps the floor", () => {
+		const backoff = new WaitBackoff(() => ({ ...cfg, disableBackoff: true }));
+		expect(backoff.enforce(30, "train-1")).toEqual({ seconds: 60, escalated: true });
+		expect(backoff.enforce(30, "train-1")).toEqual({ seconds: 60, escalated: true });
+		expect(backoff.enforce(90, "train-1")).toEqual({ seconds: 90, escalated: false });
+	});
 });
 
 describe("normalizeJobCommand", () => {

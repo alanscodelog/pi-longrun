@@ -62,10 +62,12 @@ No runtime dependencies — pi aliases `typebox` / `pi-tui` / `pi-coding-agent` 
 | `bg_wait` | Register a wake-up condition and return immediately. **Zero tokens while waiting.** Job exit / log regex / file appearing / wall-clock time, OR-ed together |
 | `bg_list` | List jobs, with progress, ETA, and latest metrics for the running ones |
 | `bg_logs` | Tail a log (only when the notification wasn't enough) |
+| `bg_task_wait_cancel` | Cancel a pending wake-up by wait id, so it never fires |
 | `bg_kill` | Send a signal to a job's process group |
 
 Commands: `/jobs` toggles the job-list widget, `/wakes` lists pending wake-ups
-(`/wakes clear` drops them all). The footer shows `▶ 2 jobs  ⏰ wake in 47m`.
+(`/wakes clear` drops them all, or cancel a single one from chat with `bg_task_wait_cancel`). The
+footer shows `▶ 2 jobs  ⏰ wake in 47m`.
 
 A wake-up carries everything needed to decide what to do next — result, metrics, log tail, and
 the note the model left for itself — because one wake-up costs one full-context turn:
@@ -95,7 +97,8 @@ A primitive the model never reaches for is worthless, so these are blocked at th
 
 - polling — `sleep 30; tail log`, `while …; do … sleep …; done`, `tail -f`, `watch`
 - manual backgrounding — `nohup`, `setsid`, a trailing `&`, answered with a pointer to `bg_start`
-- timer-only `bg_wait` below 60s, doubled for each consecutive short timer on the same job
+- timer-only waits below 60s, refused outright, and each consecutive timer on the same job doubles
+  the floor
 
 Running jobs and pending wake-ups are also injected into the system prompt every turn, so the
 model never has to spend a `bg_list` call to work out where it stands.
